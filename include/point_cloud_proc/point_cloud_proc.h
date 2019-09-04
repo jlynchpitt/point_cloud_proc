@@ -55,6 +55,10 @@
 #include <pcl/surface/poisson.h>
 //#include <pcl/surface/vtk_smoothing/vtk_mesh_quadric_decimation.h>
 
+#include <pcl/surface/mls.h>
+#include <pcl/io/vtk_io.h>
+#include <pcl/io/pcd_io.h>
+
 // Other
 #include <boost/thread/mutex.hpp>
 #include <boost/scoped_ptr.hpp>
@@ -109,9 +113,13 @@ public:
             const std::vector<int> &contour_y,
             point_cloud_proc::Object &object);
 
-    bool generateMeshFromPointCloud(sensor_msgs::PointCloud2 &cloud, pcl_msgs::PolygonMesh &mesh);
+    bool generatePoissonMesh(sensor_msgs::PointCloud2 &ros_cloud, pcl::PolygonMesh &pcl_mesh);
 
-    bool trianglePointCloud(sensor_msgs::PointCloud2 &cloud, pcl_msgs::PolygonMesh &mesh);
+    //bool generateMeshFromPointCloud(sensor_msgs::PointCloud2 &cloud, pcl_msgs::PolygonMesh &mesh);
+    bool generateMeshFromPointCloud(sensor_msgs::PointCloud2 &cloud, pcl_msgs::PolygonMesh &mesh, pcl::PolygonMesh &pcl_mesh);
+
+    bool trianglePointCloud_greedy(sensor_msgs::PointCloud2 &cloud, pcl_msgs::PolygonMesh &mesh, pcl::PolygonMesh &pcl_mesh);
+    bool trianglePointCloud(sensor_msgs::PointCloud2 &cloud, pcl_msgs::PolygonMesh &mesh, pcl::PolygonMesh &pcl_mesh);
 
     void getRemainingCloud(sensor_msgs::PointCloud2 &cloud);
 

@@ -444,10 +444,12 @@ bool PointCloudProc::clusterObjects(std::vector<point_cloud_proc::Object> &objec
 
     point_cloud_proc::Plane plane;
     if (!segmentSinglePlane(plane)) {
+        std::cout << "PCP: failed to segment single plane" << std::endl;
         return false;
     }
 
     if (!extractTabletop()) {
+        std::cout << "PCP: failed to extract tabletop" << std::endl;
         return false;
     }
     pcl::ModelCoefficients::Ptr coefficients(new pcl::ModelCoefficients);
@@ -764,7 +766,55 @@ bool PointCloudProc::getObjectFromContour(const std::vector<int> &contour_x, con
     return true;
 }
 
-bool PointCloudProc::generateMeshFromPointCloud(sensor_msgs::PointCloud2 &cloud, pcl_msgs::PolygonMesh &mesh) {
+bool PointCloudProc::generatePoissonMesh(sensor_msgs::PointCloud2 &ros_cloud, pcl::PolygonMesh &mesh) {
+    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_smoothed(new pcl::PointCloud<pcl::PointXYZ>());
+    pcl::fromROSMsg(ros_cloud, *cloud_smoothed);
+
+/*    pcl::MovingLeastSquares<pcl::PointXYZ, pcl::PointXYZ> mls;
+    mls.setInputCloud(cloud);
+    mls.setSearchRadius(0.01);
+    mls.setPolynomialFit(true);
+    mls.setPolynomialOrder(2);
+    mls.setUpsamplingMethod(pcl::MovingLeastSquares<pcl::PointXYZ, pcl::PointXYZ>::SAMPLE_LOCAL_PLANE);
+    mls.setUpsamplingRadius(0.005);
+    mls.setUpsamplingStepSize(0.003);
+
+    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_smoothed(new pcl::PointCloud<pcl::PointXYZ> ());
+    mls.process(*cloud_smoothed);*/
+
+    pcl::NormalEstimationOMP<pcl::PointXYZ, pcl::Normal> ne;
+    ne.setNumberOfThreads(8);
+    ne.setInputCloud(cloud_smoothed);
+    ne.setRadiusSearch(0.01);
+    Eigen::Vector4f centroid;
+    compute3DCentroid(*cloud_smoothed, centroid);
+    ne.setViewPoint(centroid[0], centroid[1], centroid[2]);
+
+    pcl::PointCloud<pcl::Normal>::Ptr cloud_normals(new pcl::PointCloud<pcl::Normal> ());
+    ne.compute(*cloud_normals);
+
+    for (size_t i = 0; i < cloud_normals->size (); ++i)
+    {
+      cloud_normals->points[i].normal_x *= -1;
+      cloud_normals->points[i].normal_y *= -1;
+      cloud_normals->points[i].normal_z *= -1;
+    }
+
+    std::cout << "PCP: Cloud normals calculated ";
+
+    pcl::PointCloud<pcl::PointNormal>::Ptr cloud_smoothed_normals(new pcl::PointCloud<pcl::PointNormal> ());
+    concatenateFields(*cloud_smoothed, *cloud_normals, *cloud_smoothed_normals);
+
+    pcl::Poisson<pcl::PointNormal> poisson;
+    poisson.setDepth(7);
+    poisson.setInputCloud(cloud_smoothed_normals);
+    //PolygonMesh mesh;
+    poisson.reconstruct(mesh);
+
+    std::cout << "PCP: poission mesh constructed";
+}
+
+bool PointCloudProc::generateMeshFromPointCloud(sensor_msgs::PointCloud2 &cloud, pcl_msgs::PolygonMesh &mesh, pcl::PolygonMesh &pcl_mesh) {
 
     pcl::NormalEstimationOMP<pcl::PointXYZ, PointNT> ne(6);
     pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_in(new pcl::PointCloud<pcl::PointXYZ>);
@@ -778,6 +828,8 @@ bool PointCloudProc::generateMeshFromPointCloud(sensor_msgs::PointCloud2 &cloud,
     pcl::PointCloud<pcl::PointNormal>::Ptr cloud_normals(new pcl::PointCloud<pcl::PointNormal>);
 
     pcl::fromROSMsg(cloud, *cloud_in);
+
+    pcl::io::savePCDFileASCII ("test_pcd.pcd", *cloud_in);
 
     std::vector<int> indicies;
     pcl::removeNaNFromPointCloud(*cloud_in, *cloud_in, indicies);
@@ -804,7 +856,7 @@ bool PointCloudProc::generateMeshFromPointCloud(sensor_msgs::PointCloud2 &cloud,
 //    }
 
 
-    pcl::PolygonMesh pcl_mesh;
+    //pcl::PolygonMesh pcl_mesh;
     pcl::Poisson<pcl::PointNormal> ps;
     tree2->setInputCloud(cloud_normals);
     ps.setDepth (8);
@@ -815,8 +867,6 @@ bool PointCloudProc::generateMeshFromPointCloud(sensor_msgs::PointCloud2 &cloud,
     ps.setSearchMethod(tree2);
     ps.reconstruct(pcl_mesh);
 
-
-
     pcl_conversions::fromPCL(pcl_mesh, mesh);
 
     std::cout << "PCP: # of triangles : " << pcl_mesh.polygons.size() << std::endl;
@@ -825,17 +875,17 @@ bool PointCloudProc::generateMeshFromPointCloud(sensor_msgs::PointCloud2 &cloud,
 
 }
 
-bool PointCloudProc::trianglePointCloud(sensor_msgs::PointCloud2 &cloud, pcl_msgs::PolygonMesh &mesh) {
+bool PointCloudProc::trianglePointCloud(sensor_msgs::PointCloud2 &cloud, pcl_msgs::PolygonMesh &mesh, pcl::PolygonMesh &triangles) {
 
     pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_xyz(new pcl::PointCloud<pcl::PointXYZ>);
     pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_xyz_(new pcl::PointCloud<pcl::PointXYZ>);
 //  pcl::copyPointCloud(*cloud, *cloud_xyz);
-    pcl::fromROSMsg(cloud, *cloud_xyz_);
-    pcl::VoxelGrid<pcl::PointXYZ> vg;
+    pcl::fromROSMsg(cloud, *cloud_xyz);
+/*    pcl::VoxelGrid<pcl::PointXYZ> vg;
     vg.setInputCloud(cloud_xyz_);
-//  vg.setLeafSize (0.05f, 0.05f, 0.05f);
-    vg.setLeafSize(0.005f, 0.005f, 0.005f);
-    vg.filter(*cloud_xyz);
+    //vg.setLeafSize (0.01f, 0.01f, 0.01f);
+    vg.setLeafSize(0.0005f, 0.0005f, 0.0f);
+    vg.filter(*cloud_xyz);*/
 
     // Compute point normals
     pcl::NormalEstimation<pcl::PointXYZ, pcl::Normal> ne;
@@ -855,10 +905,10 @@ bool PointCloudProc::trianglePointCloud(sensor_msgs::PointCloud2 &cloud, pcl_msg
     tree2->setInputCloud(cloud_normals);
 
 //  pcl::PolygonMesh triangles;
-    pcl::PolygonMesh::Ptr triangles(new pcl::PolygonMesh());
-    gp3_.setSearchRadius(0.2);
-    gp3_.setMu(2.5);
-    gp3_.setMaximumNearestNeighbors(100);
+    //pcl::PolygonMesh::Ptr triangles(new pcl::PolygonMesh());
+    gp3_.setSearchRadius(0.75);
+    gp3_.setMu(3.5);
+    gp3_.setMaximumNearestNeighbors(200);
     gp3_.setMaximumSurfaceAngle(M_PI / 4); // 45 degrees
     gp3_.setMinimumAngle(M_PI / 18); // 10 degrees
     gp3_.setMaximumAngle(2 * M_PI / 3); // 120 degrees
@@ -866,10 +916,10 @@ bool PointCloudProc::trianglePointCloud(sensor_msgs::PointCloud2 &cloud, pcl_msg
 
     gp3_.setInputCloud(cloud_normals);
     gp3_.setSearchMethod(tree2);
-    gp3_.reconstruct(*triangles);
+    gp3_.reconstruct(triangles);
 
 
-    pcl_conversions::fromPCL(*triangles, mesh);
+    pcl_conversions::fromPCL(triangles, mesh);
 
 
 //  pcl::PointCloud<pcl::PointXYZ> triangle_cloud;
@@ -885,6 +935,64 @@ bool PointCloudProc::trianglePointCloud(sensor_msgs::PointCloud2 &cloud, pcl_msg
 //    mesh.vertices.push_back(p);
 //    triangles.polygons[i]
 //  }
+
+
+    return true;
+}
+
+bool PointCloudProc::trianglePointCloud_greedy(sensor_msgs::PointCloud2 &ros_cloud, pcl_msgs::PolygonMesh &mesh, pcl::PolygonMesh &triangles) {
+
+    // Load input file into a PointCloud<T> with an appropriate type
+    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud (new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::fromROSMsg(ros_cloud, *cloud);
+
+    std::vector<int> indicies;
+    pcl::removeNaNFromPointCloud(*cloud, *cloud, indicies);
+    //* the data should be available in cloud
+
+    // Normal estimation*
+    pcl::NormalEstimation<pcl::PointXYZ, pcl::Normal> n;
+    pcl::PointCloud<pcl::Normal>::Ptr normals (new pcl::PointCloud<pcl::Normal>);
+    pcl::search::KdTree<pcl::PointXYZ>::Ptr tree (new pcl::search::KdTree<pcl::PointXYZ>);
+    tree->setInputCloud (cloud);
+    n.setInputCloud (cloud);
+    n.setSearchMethod (tree);
+    n.setKSearch (20);
+    n.compute (*normals);
+    //* normals should not contain the point normals + surface curvatures
+
+    // Concatenate the XYZ and normal fields*
+    pcl::PointCloud<pcl::PointNormal>::Ptr cloud_with_normals (new pcl::PointCloud<pcl::PointNormal>);
+    pcl::concatenateFields (*cloud, *normals, *cloud_with_normals);
+    //* cloud_with_normals = cloud + normals
+
+    // Create search tree*
+    pcl::search::KdTree<pcl::PointNormal>::Ptr tree2 (new pcl::search::KdTree<pcl::PointNormal>);
+    tree2->setInputCloud (cloud_with_normals);
+
+    // Initialize objects
+    pcl::GreedyProjectionTriangulation<pcl::PointNormal> gp3;
+    //pcl::PolygonMesh triangles;
+
+    // Set the maximum distance between connected points (maximum edge length)
+    gp3.setSearchRadius (0.025); //0.025
+
+    // Set typical values for the parameters
+    gp3.setMu (2.5); //2.5
+    gp3.setMaximumNearestNeighbors (500); //100
+    gp3.setMaximumSurfaceAngle(M_PI/4); // 45 degrees
+    gp3.setMinimumAngle(M_PI/18); // 10 degrees
+    gp3.setMaximumAngle(2*M_PI/3); // 120 degrees
+    gp3.setNormalConsistency(false);
+
+    // Get result
+    gp3.setInputCloud (cloud_with_normals);
+    gp3.setSearchMethod (tree2);
+    gp3.reconstruct (triangles);
+
+    // Additional vertex information
+    std::vector<int> parts = gp3.getPartIDs();
+    std::vector<int> states = gp3.getPointStates();
 
 
     return true;
